@@ -1,0 +1,7 @@
+{
+  "uuid": "legion-stats@beltra.local",
+  "name": "Legion Stats",
+  "description": "Compact CPU readout in the top bar with a Legion Toolkit-style hover card (power mode, CPU, dGPU, fans, RAM, SSD, battery).",
+  "shell-version": ["50"],
+  "version": 1
+}
