@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.legion-stats" path="/org/gnome/shell/extensions/legion-stats/">
+    <key name="bar-interval" type="i">
+      <range min="1" max="10"/>
+      <default>3</default>
+      <summary>Top bar update interval in seconds</summary>
+    </key>
+    <key name="show-cpu" type="b"><default>true</default><summary>Show the CPU section</summary></key>
+    <key name="show-gpu" type="b"><default>true</default><summary>Show the GPU section</summary></key>
+    <key name="show-system" type="b"><default>true</default><summary>Show the system section</summary></key>
+  </schema>
+</schemalist>
