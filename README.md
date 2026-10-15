@@ -1,23 +1,70 @@
 # Legion Stats
 
-GNOME Shell 50 extension for a Lenovo Legion laptop. The top bar shows one compact item (`CPU 12% · 53°`). Hovering it opens a card styled after Lenovo Legion Toolkit's tray tooltip:
+A GNOME Shell extension (GNOME 45–50) that puts one compact item in the top bar (`CPU 12% · 53°`). Hovering it opens a card styled after Lenovo Legion Toolkit's tray tooltip:
 
-- ACPI platform profile
-- CPU: usage, average frequency, temperature, fan
-- Discrete NVIDIA GPU: state, usage and VRAM, clock and temperature, power and P-state, fan
-- System: RAM, NVMe temperatures, battery level, status and power draw
+- Platform profile (ACPI `platform_profile`)
+- CPU: usage, average frequency, package temperature
+- Discrete GPU: state, usage and VRAM, clock and temperature, power and P-state
+- System: fans, memory, NVMe temperatures, battery
 
-The dGPU is only queried through `nvidia-smi` while the card is open and the card's runtime status is `active`, so the bar never wakes it.
+![Hover card](screenshot.png)
+
+The card uses the shell theme (light, dark, high contrast and accent colour). Rows without a sensor are hidden. Numbers follow your locale.
 
 ## Install
 
-    mkdir -p ~/.local/share/gnome-shell/extensions
-    git clone <this repo> ~/.local/share/gnome-shell/extensions/legion-stats@beltra.local
-    # log out and back in (Wayland), then:
-    gnome-extensions enable legion-stats@beltra.local
+From a release zip:
 
-## Notes
+    gnome-extensions install --force legion-stats@beltra.github.io.shell-extension.zip
 
-- hwmon devices are resolved by name (`coretemp`, `lenovo_wmi_other`, `nvme`) when the extension is enabled.
-- `fan2` is assumed to be the GPU fan.
-- CPU package power is not shown: the Intel RAPL counter is root-only.
+From git:
+
+    git clone https://github.com/beltra/legion-stats-gnome
+    cd legion-stats-gnome && make install
+
+Then log out and back in (on Wayland the shell cannot load a new extension in place), and run `gnome-extensions enable legion-stats@beltra.github.io`. `make pack` builds the zip only.
+
+Preferences: top bar interval (default 3 s) and which card sections to show.
+
+## Supported hardware
+
+| Item | Source | Tested |
+|---|---|---|
+| CPU usage | `/proc/stat` | yes |
+| CPU temperature | hwmon `coretemp` "Package id", `k10temp`/`zenpower` "Tdie" or "Tctl", `cpu_thermal` | Intel only |
+| CPU frequency | `/proc/cpuinfo` (x86), otherwise cpufreq policies | Intel only |
+| Fans | every `fan*_input` outside GPU drivers (lenovo_wmi_other, thinkpad, dell_smm, asus, …) | Lenovo only |
+| NVIDIA dGPU | `nvidia-smi` | yes |
+| AMD / Intel dGPU | `gpu_busy_percent`, `mem_info_vram_*`, and the device's hwmon | no |
+| Battery | every system battery in `/sys/class/power_supply` | single battery only |
+| NVMe | hwmon `nvme` "Composite" | yes |
+
+## Power use
+
+- The top bar reads `/proc/stat` and one temperature file every 3 s through file handles kept open. It stops while the panel is hidden (fullscreen) or the screen is blanked. When the screen is locked the shell disables the extension.
+- The card reads everything else every 2 s, and only while it is open. Reads run asynchronously because NVMe and ACPI battery reads can block for 10–60 ms.
+- The dGPU is queried only while its runtime PM status is `active`. One `nvidia-smi --loop-ms` process runs per hover and is killed when the card closes. Two limits: the status check and the moment nvidia-smi opens the device are a few ms apart, and if the GPU suspends in that gap nvidia-smi resumes it. While the card stays open, an already-active GPU cannot suspend.
+
+Measured with a stubbed harness under `strace -c` (60 s, Legion Pro 5i):
+
+| | before | after |
+|---|---|---|
+| bar: file opens/min | 63 | 0 (2 at start) |
+| bar: I/O syscalls/min | ~420 | ~90 |
+| bar: wakeups/min | 30 | 20 |
+| card open: CPU time/min | 1.65 s | 0.38 s |
+| card open: processes started/min | 60 | 1 per hover |
+
+## Accuracy notes
+
+- CPU usage is the busy share of the aggregate `cpu` line, like `top`: guest time is not double counted, and steal counts as busy. The first value appears after one interval.
+- Frequency is the mean over online CPUs. On hybrid CPUs the E-cores pull it down.
+- Memory used is `MemTotal − MemAvailable`, like `free` and htop. Sizes are in SI units (GB), as elsewhere in GNOME, so they read slightly higher than `free -h` (GiB).
+- Battery power is shown only while charging or discharging, as an absolute value.
+- Temperatures are in °C.
+
+`tools/check-values.sh` prints the same readings from `top`, `sensors`, `free` and `nvidia-smi` so you can compare them with the card.
+
+## License
+
+GPL-2.0-or-later

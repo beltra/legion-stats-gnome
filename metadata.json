@@ -1,7 +1,9 @@
 {
-  "uuid": "legion-stats@beltra.local",
+  "uuid": "legion-stats@beltra.github.io",
   "name": "Legion Stats",
-  "description": "Compact CPU readout in the top bar with a Legion Toolkit-style hover card (power mode, CPU, dGPU, fans, RAM, SSD, battery).",
-  "shell-version": ["50"],
-  "version": 1
+  "description": "Compact CPU load and temperature in the top bar, with a hover card in the style of Lenovo Legion Toolkit: platform profile, CPU, discrete GPU (NVIDIA, AMD, Intel), fans, memory, SSD and battery. Reads only what it shows, pauses when the panel is hidden or the screen is blanked, and never wakes a suspended dGPU.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/beltra/legion-stats-gnome",
+  "settings-schema": "org.gnome.shell.extensions.legion-stats",
+  "version-name": "2.0"
 }
