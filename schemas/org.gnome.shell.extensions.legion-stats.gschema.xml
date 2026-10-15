@@ -6,6 +6,11 @@
       <default>3</default>
       <summary>Top bar update interval in seconds</summary>
     </key>
+    <key name="bar-cpu-usage" type="b"><default>true</default><summary>Show CPU usage in the top bar</summary></key>
+    <key name="bar-cpu-temp" type="b"><default>true</default><summary>Show CPU temperature in the top bar</summary></key>
+    <key name="bar-gpu-usage" type="b"><default>false</default><summary>Show discrete GPU usage in the top bar</summary></key>
+    <key name="bar-gpu-temp" type="b"><default>false</default><summary>Show discrete GPU temperature in the top bar</summary></key>
+    <key name="bar-memory" type="b"><default>false</default><summary>Show memory usage in the top bar</summary></key>
     <key name="show-cpu" type="b"><default>true</default><summary>Show the CPU section</summary></key>
     <key name="show-gpu" type="b"><default>true</default><summary>Show the GPU section</summary></key>
     <key name="show-system" type="b"><default>true</default><summary>Show the system section</summary></key>

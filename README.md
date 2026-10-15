@@ -1,6 +1,6 @@
 # Legion Stats
 
-A GNOME Shell extension (GNOME 45–50) that puts one compact item in the top bar (`CPU 12% · 53°`). Hovering it opens a card styled after Lenovo Legion Toolkit's tray tooltip:
+A GNOME Shell extension (GNOME 45–50) that puts one compact item in the top bar (`CPU 12% 53°`). Hovering it opens a card styled after Lenovo Legion Toolkit's tray tooltip:
 
 - Platform profile (ACPI `platform_profile`)
 - CPU: usage, average frequency, package temperature
@@ -10,6 +10,10 @@ A GNOME Shell extension (GNOME 45–50) that puts one compact item in the top ba
 ![Hover card](screenshot.png)
 
 The card uses the shell theme (light, dark, high contrast and accent colour). Rows without a sensor are hidden. Numbers follow your locale.
+
+- **Hover** the item to peek at the card.
+- **Click** to keep it open. Click outside it, press Escape, or click the item again to close it.
+- **Right click** for a menu with Settings.
 
 ## Install
 
@@ -24,7 +28,10 @@ From git:
 
 Then log out and back in (on Wayland the shell cannot load a new extension in place), and run `gnome-extensions enable legion-stats@beltra.github.io`. `make pack` builds the zip only.
 
-Preferences: top bar interval (default 3 s) and which card sections to show.
+Preferences:
+
+- Top bar: update interval (default 3 s), and any combination of CPU usage, CPU temperature, GPU usage, GPU temperature and memory, shown as `CPU 12% 53° · GPU 4% 41° · RAM 37%`.
+- Card: which sections to show.
 
 ## Supported hardware
 
@@ -43,6 +50,7 @@ Preferences: top bar interval (default 3 s) and which card sections to show.
 
 - The top bar reads `/proc/stat` and one temperature file every 3 s through file handles kept open. It stops while the panel is hidden (fullscreen) or the screen is blanked. When the screen is locked the shell disables the extension.
 - The card reads everything else every 2 s, and only while it is open. Reads run asynchronously because NVMe and ACPI battery reads can block for 10–60 ms.
+- GPU values in the top bar are off by default. When enabled they are read every 10 s, which is longer than the usual 5 s runtime-PM autosuspend delay, and only while the dGPU is already awake; otherwise the bar shows `GPU off`. On NVIDIA each read starts `nvidia-smi` once (about 25 ms of CPU).
 - The dGPU is queried only while its runtime PM status is `active`. One `nvidia-smi --loop-ms` process runs per hover and is killed when the card closes. Two limits: the status check and the moment nvidia-smi opens the device are a few ms apart, and if the GPU suspends in that gap nvidia-smi resumes it. While the card stays open, an already-active GPU cannot suspend.
 
 Measured with a stubbed harness under `strace -c` (60 s, Legion Pro 5i):
