@@ -1,6 +1,7 @@
-.ls-card { background-color: rgba(28,28,30,0.97); border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); padding: 12px 16px; min-width: 270px; color: #e8e8ea; }
-.ls-title { font-weight: bold; font-size: 11pt; padding-bottom: 6px; }
-.ls-section { font-weight: bold; font-size: 9pt; color: #8e8e93; padding-top: 10px; padding-bottom: 2px; }
-.ls-key { color: #a0a0a6; font-size: 10pt; }
-.ls-val { font-size: 10pt; font-weight: 500; }
-.ls-bar { font-size: 10pt; }
+/* Colours, background, border and radius come from the theme's popup-menu-content. */
+.ls-bar { font-feature-settings: "tnum"; min-width: 6.5em; text-align: center; }
+.ls-card { padding: 12px 16px; min-width: 17em; spacing: 2px; }
+.ls-title { font-weight: bold; padding-bottom: 4px; max-width: 24em; }
+.ls-section { font-weight: bold; font-size: 0.8em; padding-top: 8px; }
+.ls-card.ls-accent .ls-section { color: -st-accent-color; }
+.ls-val { font-feature-settings: "tnum"; padding-left: 1.5em; }
