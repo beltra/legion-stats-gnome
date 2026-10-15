@@ -269,7 +269,7 @@ export default class LegionStats extends Extension {
     _buildCard() {
         this._card = new St.BoxLayout({vertical: true, style_class: 'popup-menu-content ls-card', visible: false});
         // -st-accent-color exists from GNOME 47; only opt in where the theme knows it.
-        if (St.ThemeContext.get_for_stage(global.stage).accent_color !== undefined)
+        if (St.Settings.get().accent_color !== undefined)
             this._card.add_style_class_name('ls-accent');
         const title = productName();
         if (title)
