@@ -68,19 +68,6 @@ export default class LegionStats extends Extension {
         this._prevStat = null;
         this._cpuPct = null;
         this._gpuQuerying = false;
-        this._ppd = null;
-        this._ppdProxy = null;
-        this._cancel = new Gio.Cancellable();
-        Gio.DBusProxy.new_for_bus(Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, null,
-            'net.hadess.PowerProfiles', '/net/hadess/PowerProfiles', 'net.hadess.PowerProfiles',
-            this._cancel, (_o, res) => {
-                try {
-                    this._ppdProxy = Gio.DBusProxy.new_for_bus_finish(res);
-                    this._ppdProxy.connect('g-properties-changed', () => this._updateMode());
-                    this._updateMode();
-                } catch (_e) { /* daemon missing or cancelled */ }
-            });
-
         this._button = new PanelMenu.Button(0.0, 'Legion Stats', true);
         this._label = new St.Label({
             text: 'CPU —',
@@ -111,9 +98,6 @@ export default class LegionStats extends Extension {
         this._stopCardTimer();
         if (this._hoverId) this._button.disconnect(this._hoverId);
         this._hoverId = null;
-        this._cancel?.cancel();
-        this._cancel = null;
-        this._ppdProxy = null;
         if (this._card) {
             Main.layoutManager.removeChrome(this._card);
             this._card.destroy();
@@ -199,11 +183,6 @@ export default class LegionStats extends Extension {
         const r = this._rows = {};
         c.add_child(new St.Label({text: 'Legion Pro 5i', style_class: 'ls-title'}));
 
-        const modeRow = new St.BoxLayout({x_expand: true});
-        modeRow.add_child(new St.Label({text: 'Power mode', style_class: 'ls-key', x_expand: true}));
-        r.mode = new St.Label({text: '—', style_class: 'ls-val'});
-        modeRow.add_child(r.mode);
-        c.add_child(modeRow);
         r.preset = this._mkRow(c, 'Platform profile');
 
         this._mkSection(c, 'CPU');
@@ -263,7 +242,6 @@ export default class LegionStats extends Extension {
         const set = (o, s) => o.v.set_text(s);
 
         // power
-        this._updateMode();
         set(r.preset, cap(readText('/sys/firmware/acpi/platform_profile')));
 
         // cpu
@@ -298,12 +276,6 @@ export default class LegionStats extends Extension {
         const pw = readNum(`${bat}/power_now`);
         const watts = pw === null ? '' : ` · ${(pw / 1e6).toFixed(1)} W`;
         set(r.bat, `${fmt(cp, '%')} ${st ?? ''}${watts}`);
-    }
-
-    _updateMode() {
-        if (!this._rows) return;
-        const p = this._ppdProxy?.get_cached_property('ActiveProfile')?.unpack() ?? null;
-        this._rows.mode.set_text(p ? cap(p) : '—');
     }
 
     _refreshGpu() {

@@ -2,7 +2,7 @@
 
 GNOME Shell 50 extension for a Lenovo Legion laptop. The top bar shows one compact item (`CPU 12% · 53°`). Hovering it opens a card styled after Lenovo Legion Toolkit's tray tooltip:
 
-- Power mode (power-profiles-daemon, via D-Bus) plus the ACPI platform profile
+- ACPI platform profile
 - CPU: usage, average frequency, temperature, fan
 - Discrete NVIDIA GPU: state, usage and VRAM, clock and temperature, power and P-state, fan
 - System: RAM, NVMe temperatures, battery level, status and power draw
