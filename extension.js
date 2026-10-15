@@ -2,15 +2,21 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
+import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 Gio._promisify(Gio.File.prototype, 'load_contents_async');
 Gio._promisify(Gio.DataInputStream.prototype, 'read_line_async');
 Gio._promisify(Gio.DBusConnection.prototype, 'call');
+Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 
 const CARD_INTERVAL_S = 2;
+// Longer than the usual 5 s runtime-PM autosuspend delay, so the bar's GPU
+// reads do not keep an idle dGPU from suspending.
+const GPU_BAR_INTERVAL_US = 10e6;
 const GPU_HWMON = ['amdgpu', 'radeon', 'nouveau', 'i915', 'xe'];
 const NV_FIELDS = 'utilization.gpu,memory.used,memory.total,clocks.sm,temperature.gpu,power.draw,pstate';
 
@@ -51,6 +57,7 @@ function ls(dir) {
 const toNum = t => t === null || t === '' || Number.isNaN(Number(t)) ? null : Number(t);
 const num = (v, d = 0) => v.toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
 const join = parts => parts.filter(p => p !== null).join(' · ') || null;
+const join2 = parts => parts.filter(p => p !== null).join(' ') || null;
 const unit = (v, u, d = 0) => v === null ? null : `${num(v, d)}${u}`;
 
 // A file kept open between reads: lseek+read instead of open/fstat/read/close.
@@ -140,12 +147,17 @@ export default class LegionStats extends Extension {
         this._gpu = findGpu();
         this._stat = new Handle('/proc/stat');
         this._temp = this._sensors.cpuTemp ? new Handle(this._sensors.cpuTemp) : null;
+        this._mem = new Handle('/proc/meminfo');
         this._prevStat = null;
         this._cpuPct = null;
         this._blanked = false;
         this._refreshing = false;
         this._nvProc = null;
         this._nvFailed = false;
+        this._grab = null;
+        this._pinned = false;
+        this._gpuBar = null;
+        this._gpuBarAt = 0;
 
         this._button = new PanelMenu.Button(0.0, this.metadata.name, true);
         this._label = new St.Label({text: 'CPU', y_align: Clutter.ActorAlign.CENTER, style_class: 'ls-bar'});
@@ -153,7 +165,24 @@ export default class LegionStats extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._button, 0, 'right');
         this._buildCard();
 
-        this._button.connect('notify::hover', () => this._button.hover ? this._showCard() : this._hideCard());
+        this._menu = new PopupMenu.PopupMenu(this._button, 0.5, St.Side.TOP);
+        this._menu.addAction('Settings', () => this.openPreferences());
+        Main.uiGroup.add_child(this._menu.actor);
+        this._menu.actor.hide();
+        this._menuManager = new PopupMenu.PopupMenuManager(this._button);
+        this._menuManager.addMenu(this._menu);
+
+        // Hover shows the card; a click pins it until a click outside or Escape;
+        // a right click opens a menu with Settings.
+        this._button.connect('notify::hover', () => {
+            if (this._button.hover)
+                this._showCard();
+            else if (!this._pinned)
+                this._hideCard();
+        });
+        this._button.connect('button-press-event', (_a, e) => this._onPress(e.get_button()));
+        this._button.connect('touch-event', (_a, e) => e.type() === Clutter.EventType.TOUCH_BEGIN
+            ? this._onPress(Clutter.BUTTON_PRIMARY) : Clutter.EVENT_PROPAGATE);
         this._label.connect('notify::mapped', () => this._schedule());
         this._settings.connectObject('changed', () => {
             this._schedule(true);
@@ -172,11 +201,15 @@ export default class LegionStats extends Extension {
         global.backend.get_monitor_manager().disconnectObject(this);
         this._settings.disconnectObject(this);
         this._settings = null;
+        this._unpin();
         this._hideCard();
         this._stopBar();
+        this._menu.destroy();
+        this._menu = this._menuManager = null;
         this._stat.close();
         this._temp?.close();
-        this._stat = this._temp = null;
+        this._mem.close();
+        this._stat = this._temp = this._mem = null;
         Main.layoutManager.removeChrome(this._card);
         this._card.destroy();
         this._card = this._rows = this._sections = null;
@@ -241,10 +274,69 @@ export default class LegionStats extends Extension {
         return v === null ? null : v / 1000;
     }
 
+    // Memory in use as in free/htop: MemTotal - MemAvailable.
+    _memPct() {
+        const t = this._mem.read() ?? '';
+        const total = Number(t.match(/^MemTotal:\s+(\d+)/m)?.[1]);
+        const avail = Number(t.match(/^MemAvailable:\s+(\d+)/m)?.[1]);
+        return total && !Number.isNaN(avail) ? 100 * (1 - avail / total) : null;
+    }
+
     _tick() {
+        const on = k => this._settings.get_boolean(`bar-${k}`);
         this._cpuPct = this._cpuUsage() ?? this._cpuPct;
-        const t = this._cpuTemp();
-        this._label.set_text(join([`CPU ${this._cpuPct === null ? '…' : `${num(this._cpuPct)}%`}`, unit(t, '°')]));
+        const cpu = join2([
+            on('cpu-usage') ? this._cpuPct === null ? '…' : `${num(this._cpuPct)}%` : null,
+            on('cpu-temp') ? unit(this._cpuTemp(), '°') : null,
+        ]);
+        let gpu = null;
+        if (this._gpu && (on('gpu-usage') || on('gpu-temp'))) {
+            if (GLib.get_monotonic_time() - this._gpuBarAt >= GPU_BAR_INTERVAL_US)
+                this._readGpuBar();
+            const g = this._gpuBar;
+            gpu = g === 'off' ? 'off' : join2([
+                on('gpu-usage') ? unit(g?.usage ?? null, '%') : null,
+                on('gpu-temp') ? unit(g?.temp ?? null, '°') : null,
+            ]);
+        }
+        const mem = on('memory') ? unit(this._memPct(), '%') : null;
+        this._label.set_text(join([
+            cpu && `CPU ${cpu}`, gpu && `GPU ${gpu}`, mem && `RAM ${mem}`,
+        ].map(x => x || null)) ?? 'CPU');
+    }
+
+    // GPU usage and temperature for the bar, under the same never-wake rule as
+    // the card, and at most every GPU_BAR_INTERVAL_US.
+    async _readGpuBar() {
+        const g = this._gpu;
+        const c = this._cancel;
+        this._gpuBarAt = GLib.get_monotonic_time();
+        const rt = await read(`${g.pci}/power/runtime_status`, c);
+        if (rt !== null && rt !== 'active') {
+            this._gpuBar = 'off';
+            return;
+        }
+        if (this._nvProc)
+            return; // the open card's nvidia-smi loop already updates it
+        let bar = null;
+        if (g.nvidia && !this._nvFailed && readSync(`${g.pci}/power/runtime_status`) === 'active') {
+            try {
+                const proc = Gio.Subprocess.new(['nvidia-smi', '-i', g.pci.split('/').pop(),
+                    '--query-gpu=utilization.gpu,temperature.gpu', '--format=csv,noheader,nounits'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+                const [out] = await proc.communicate_utf8_async(null, c);
+                const [usage, temp] = (out ?? '').split(',').map(x => toNum(x.trim()));
+                bar = {usage, temp};
+            } catch (_e) { /* no nvidia-smi, or cancelled */ }
+        } else if (!g.nvidia) {
+            const [usage, temp] = await Promise.all([
+                read(`${g.pci}/gpu_busy_percent`, c).then(toNum),
+                g.hwmon ? read(`${g.hwmon}/temp1_input`, c).then(toNum) : null,
+            ]);
+            bar = {usage, temp: temp === null ? null : temp / 1000};
+        }
+        if (!c.is_cancelled())
+            this._gpuBar = bar;
     }
 
     // ---- card ----
@@ -267,7 +359,8 @@ export default class LegionStats extends Extension {
     }
 
     _buildCard() {
-        this._card = new St.BoxLayout({vertical: true, style_class: 'popup-menu-content ls-card', visible: false});
+        this._card = new St.BoxLayout({vertical: true, style_class: 'popup-menu-content ls-card', visible: false, reactive: true});
+        this._card.connect('captured-event', (_a, e) => this._onCardEvent(e));
         // -st-accent-color exists from GNOME 47; only opt in where the theme knows it.
         if (St.Settings.get().accent_color !== undefined)
             this._card.add_style_class_name('ls-accent');
@@ -303,6 +396,64 @@ export default class LegionStats extends Extension {
     _set(row, text) {
         row.v.text = text ?? '';
         row.row.visible = text !== null;
+    }
+
+    _onPress(button) {
+        if (button === Clutter.BUTTON_SECONDARY) {
+            this._unpin();
+            this._hideCard();
+            this._menu.toggle();
+        } else
+            this._pin();
+        return Clutter.EVENT_STOP;
+    }
+
+    _pin() {
+        if (this._pinned)
+            return;
+        // Set first: the grab drops the button's hover, which must not hide the card.
+        this._pinned = true;
+        this._showCard();
+        // A grab on a hidden actor is cancelled, so show it before the first refresh lands.
+        this._card.show();
+        this._placeCard();
+        this._grab = Main.pushModal(this._card, {actionMode: Shell.ActionMode.POPUP});
+        this._card.grab_key_focus();
+    }
+
+    _unpin() {
+        if (!this._pinned)
+            return;
+        this._pinned = false;
+        if (this._grab)
+            Main.popModal(this._grab);
+        this._grab = null;
+        if (!this._button.hover)
+            this._hideCard();
+    }
+
+    // While the card holds the grab every event targets it, so test the position.
+    _contains(x, y) {
+        const [cx, cy] = this._card.get_transformed_position();
+        const [w, h] = this._card.get_transformed_size();
+        return x >= cx && x < cx + w && y >= cy && y < cy + h;
+    }
+
+    // Same rules as the shell's popup menus: Escape or a press outside closes.
+    _onCardEvent(event) {
+        if (!this._pinned)
+            return Clutter.EVENT_PROPAGATE;
+        const type = event.type();
+        if (type === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
+            this._unpin();
+            return Clutter.EVENT_STOP;
+        }
+        if ((type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) &&
+            !this._contains(...event.get_coords())) {
+            this._unpin();
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
     _showCard() {
@@ -465,6 +616,7 @@ export default class LegionStats extends Extension {
         this._set(this._rows.gpuLoad, join([unit(busy, '%'),
             vu !== null && vt ? `${GLib.format_size(vu)} / ${GLib.format_size(vt)}` : null]));
         this._set(this._rows.gpuFt, join([unit(freq === null ? null : freq / 1e6, ' MHz'), unit(temp === null ? null : temp / 1000, ' °C')]));
+        this._gpuBar = {usage: busy, temp: temp === null ? null : temp / 1000};
         this._set(this._rows.gpuPower, unit(watts === null ? null : watts / 1e6, ' W', 1));
         this._set(this._rows.gpuFan, unit(fan, ' RPM'));
         return null;
@@ -516,6 +668,7 @@ export default class LegionStats extends Extension {
         const mib = x => toNum(x) === null ? null : GLib.format_size(toNum(x) * 1048576);
         this._set(this._rows.gpuLoad, join([unit(toNum(util), '%'), mib(mu) && mib(mt) ? `${mib(mu)} / ${mib(mt)}` : null]));
         this._set(this._rows.gpuFt, join([unit(toNum(clk), ' MHz'), unit(toNum(tmp), ' °C')]));
+        this._gpuBar = {usage: toNum(util), temp: toNum(tmp)};
         this._set(this._rows.gpuPower, join([unit(toNum(pwr), ' W', 1), /^P\d+$/.test(ps ?? '') ? ps : null]));
         this._set(this._rows.gpuFan, null);
     }
